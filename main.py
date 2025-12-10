@@ -1,58 +1,78 @@
+# main.py
 import sys
 import asyncio
 import logging
 from hive_core.torrent import Torrent
 from hive_core.tracker import TrackerManager
 from hive_core.utils import generate_peer_id
+from hive_core.peer import PeerConnection
 
-# Configure Logging
-logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
+# Configure nicer logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(levelname)s] %(message)s',
+)
+
+async def process_peer(semaphore, ip, port, torrent, my_id):
+    """
+    Limits concurrent connections using a semaphore.
+    """
+    async with semaphore:
+        peer = PeerConnection(ip, port, torrent, my_id)
+        await peer.start()
 
 async def main():
-    print("🐝 HIVE-MIND CLIENT v0.1 Starting...")
+    print("🐝 HIVE-MIND CLIENT v0.1 - DAY 3")
     
     if len(sys.argv) < 2:
         print("Usage: python main.py <file.torrent>")
         return
 
     try:
-        # Step 1: Load Torrent
+        # 1. Load Torrent
         t_path = sys.argv[1]
         torrent = Torrent(t_path)
-        print(torrent)
+        print(f"📦 TORRENT: {torrent.name}")
         
-        # Step 2: Generate Identity
+        # 2. Identity
         my_id = generate_peer_id()
-        print(f"\n🆔 Generated Peer ID: {my_id.decode()}")
-
-        # Step 3: Contact Tracker
-        # This now uses the logic that tries multiple trackers if one fails
-        print("\n📡 Contacting Tracker...")
+        
+        # 3. Tracker
+        print("📡 Contacting Tracker...")
         tracker = TrackerManager(torrent, my_id)
-        peers = tracker.connect()
+        peers_list = tracker.connect()
 
-        # Step 4: Display Results
-        if peers:
-            print(f"\n🟢 SUCCESS: Tracker returned {len(peers)} peers.")
-            print(f"   Swarm Health: {tracker.seeders} Seeders, {tracker.leechers} Leechers")
-            print("\n   Sample Peers:")
-            for ip, port in peers[:10]: # Show first 10
-                print(f"   ➡ {ip}:{port}")
-                
-            print(f"\n   ...and {len(peers)-10} others.")
-            print("\n✅ DAY 2 COMPLETE: Tracker communication fixed.")
-        else:
-            print("\n🔴 FAILURE: Could not retrieve peers from any tracker in the list.")
+        if not peers_list:
+            print("🔴 FAILURE: No peers found.")
+            return
+
+        print(f"🟢 SUCCESS: Found {len(peers_list)} potential peers.")
+        print("⚡ STARTING SWARM HANDSHAKE (Max 50 concurrent)...")
+        print("-----------------------------------")
+
+        # 4. Async Connection Swarm
+        sem = asyncio.Semaphore(50) # Allow 50 parallel connections
+        tasks = []
+        
+        for ip, port in peers_list:
+            task = asyncio.create_task(
+                process_peer(sem, ip, port, torrent, my_id)
+            )
+            tasks.append(task)
+
+        # Wait for everyone to finish
+        await asyncio.gather(*tasks)
+        
+        print("-----------------------------------")
+        print("✅ DAY 3 COMPLETE: Handshake logic verified.")
 
     except Exception as e:
         print(f"❌ FATAL ERROR: {e}")
 
 if __name__ == "__main__":
     try:
-        # Windows AsyncIO fix (good habit to keep even for Day 2)
         if sys.platform == 'win32':
             asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
         asyncio.run(main())
     except KeyboardInterrupt:
-        pass
+        print("\n🛑 Stopping...")
